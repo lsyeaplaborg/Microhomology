@@ -32,7 +32,7 @@
 
 ### Clone this repository to you local folder
 
-`git clone https://github.com/lsyeaplab/Microhomology.git` 
+`git clone https://github.com/lsyeaplaborg/Microhomology.git` 
 
 
 ### Modify the `.sh` file accordingly 
