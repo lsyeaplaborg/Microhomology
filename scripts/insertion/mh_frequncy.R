@@ -1,0 +1,306 @@
+### load dependent packages
+packages <- c("ggplot2", "reshape", "ggpubr", "rstatix", "plyr", "tidyverse", "gridExtra")
+install.packages(setdiff(packages, rownames(installed.packages())))
+suppressPackageStartupMessages({
+  library(ggplot2)
+  library(reshape)
+  #library(easyGgplot2)
+  library(ggpubr)
+  library(rstatix)
+  library(plyr)
+  library(tidyverse)
+  library(gridExtra)
+})
+
+### functions
+mh_mean_sem=function(fre_homo_all_fre,merge_mh_len=NULL,meta_df){
+  if (! is.null(merge_mh_len)){
+    fre_homo_all_fre_flter=fre_homo_all_fre[which(fre_homo_all_fre$micro_homo_len>=merge_mh_len),]
+    tmp_fre=as.data.frame(colSums(fre_homo_all_fre_flter[,2:ncol(fre_homo_all_fre_flter)]))
+    tmp_fre=as.data.frame(t(tmp_fre))
+    tmp_fre=cbind(data.frame(micro_homo_len=paste0('>=',merge_mh_len)),tmp_fre)
+    fre_homo_all_fre_merge=rbind(fre_homo_all_fre[which(fre_homo_all_fre$micro_homo_len<merge_mh_len),],tmp_fre)
+    rownames(fre_homo_all_fre_merge)=fre_homo_all_fre_merge$micro_homo_len
+  }else{
+    fre_homo_all_fre_merge=fre_homo_all_fre
+  }
+    
+  # calculate mean and sd for mh>=5
+  all_msd=data.frame()
+  for (i in unique(meta_df$group)){
+    sam_id=meta_df[which(meta_df$group==i),'sam_id']
+    sam_id=intersect(sam_id,colnames(fre_homo_all_fre_merge))
+    if (length(sam_id)>0){
+      tmp_sam=data.frame(sam_id=sam_id,group=i)
+      mh_tmp=fre_homo_all_fre_merge[,c('micro_homo_len',sam_id)]
+      if (length(sam_id)>1){
+        sam_msd=data.frame()
+        for (j in mh_tmp$micro_homo_len){
+          tmp=as.numeric(mh_tmp[which(mh_tmp$micro_homo_len==j),2:ncol(mh_tmp)])
+          tmp_df=data.frame(micro_homo_len=j,mean=mean(tmp),sd=sd(tmp)/sqrt(length(sam_id))) # sd here indicate the sem
+          sam_msd=rbind(sam_msd,tmp_df)
+        }
+        sam_msd$group=i
+      }else{
+        sam_msd=mh_tmp
+        colnames(sam_msd)[2]='mean'
+        sam_msd$sd=0
+        sam_msd$group=i
+      }
+      all_msd=rbind(all_msd,sam_msd)
+    }
+  }
+  return(list(msd_df=all_msd,fre_df=fre_homo_all_fre_merge))
+}
+
+
+run_downstream=function(pipline_out,meta_dat,out_dir,total_reads_dat,category,min_ins_len,prefix,factor_order_mh=NULL,merge_mh_len=NULL){
+  message('Downstream analysis')
+  print(Sys.time())
+  if (!dir.exists(out_dir)){
+    dir.create(out_dir)
+  }
+  ######################################################
+  #** load outputs of the MH identification pipeline ###
+  ######################################################
+  message('Load data')
+  print(Sys.time())
+  
+  fre_homo_all_fre=data.frame()
+  fre_homo_all_count=data.frame()
+  envent_count=data.frame() # summary fo total insertion
+  ins_mh_all=data.frame() # all insertion
+  ins_sum=data.frame()
+  for (i in list.files(pipline_out)){
+    f=read.delim(file.path(pipline_out,i),header = T,fill = T,stringsAsFactors = F)
+    #colnames(f)=c("Read","unknown1","Ref","bp","unknown2","cigar","unknown3","unknown4","unknown5","seq","score","unknown6","unknown7","unknown8","unknown9","unknown10","unknown11","unknown12","unknown13","Experiment","DSt","Type","InSize","InsSeq","num_I","num_D","category","before_seq","after_seq","same_ratio","basefrom","baseto","ins_MH","MH_len","MH_pos")
+    # remove insertions which length less than manually defined criteria 
+    f=f[which(f$InSize>=min_ins_len),]
+    if (nrow(f)>0){
+      ### summarize insertion length
+      tmp_len=as.data.frame(table(f$InSize))
+      colnames(tmp_len)[2]=substring(i,1,6)
+      if (nrow(envent_count)==0){
+        envent_count=tmp_len
+      }else{
+        envent_count=merge(envent_count,tmp_len,by='Var1',all = TRUE)
+      }
+      ### summarize MH count and total duplicated insertions
+      total_reads=nrow(f)
+      category=unlist(strsplit(category,split = ","))
+      duplicate_reads=f[which(f$category%in%category),] # duplicated insertions
+      mh_ins=nrow(f[which(f$MH_len>0),])
+      total_duplicate_reads=nrow(duplicate_reads)
+      tmp_df=data.frame(sam_id=substring(i,1,6),total_ins=total_reads,dupl_ins=total_duplicate_reads,mh_ins=mh_ins)
+      ins_sum=rbind(ins_sum,tmp_df)
+      ### distribution of microhomology
+      fre_homo=as.data.frame(table(f$MH_len))
+      fre_homo$Feq2=signif(fre_homo$Freq/sum(fre_homo$Freq),digits = 3)
+      # freq
+      fre_homo_fre=fre_homo[,c(1,3)]
+      colnames(fre_homo_fre)=c('micro_homo_len',substring(i,1,6))
+      # count
+      fre_homo_count=fre_homo[,c(1,2)]
+      colnames(fre_homo_count)=c('micro_homo_len',substring(i,1,6))
+      if (nrow(fre_homo_all_fre)==0){
+        fre_homo_all_fre=fre_homo_fre
+        fre_homo_all_count=fre_homo_count
+      }else{
+        fre_homo_all_fre=merge(fre_homo_all_fre,fre_homo_fre,by='micro_homo_len',all = TRUE)
+        fre_homo_all_count=merge(fre_homo_all_count,fre_homo_count,by='micro_homo_len',all = TRUE)
+      }
+      
+      ### summarize the length of insertion and MH
+      tmp_df=f[,c('InSize','MH_len')]
+      tmp_df$sam_id=substring(i,1,6)
+      ins_mh_all=rbind(ins_mh_all,tmp_df)
+      
+    }else{
+      message(paste0('Sample ',i,' does not have enough items!'))
+    }
+  }
+  
+  # replace NA to zero
+  fre_homo_all_fre[is.na(fre_homo_all_fre)]=0
+  fre_homo_all_fre$micro_homo_len=as.numeric(as.character(fre_homo_all_fre$micro_homo_len))
+  
+  ############################################
+  #** calculate mean and sd for each group ###
+  ############################################
+  message('Calculate mean and sd for each group')
+  print(Sys.time())
+  # load meta info
+  meta_df=read.table(meta_dat,header = T,stringsAsFactors = F)
+  meta_df$group=sapply(meta_df$Genotype,function(x){
+    tmp=unlist(strsplit(x,split ='_'))
+    if (length(tmp)==2){
+      group=tmp[1]
+    }else{
+      group=tmp[length(tmp)]
+    }
+    return(group)
+  })
+  # calculate mean and sd
+  tmp_ls=mh_mean_sem(fre_homo_all_fre,merge_mh_len,meta_df)
+  all_msd=tmp_ls[['msd_df']]
+  fre_homo_all_fre_merge=tmp_ls[['fre_df']]
+  ############################################################
+  ### distribution of MH ratio, all condition in one panel ###
+  ############################################################
+  message('Distribution of MH ratio')
+  print(Sys.time())
+  df_all=all_msd
+  if (! is.null(factor_order_mh)){
+    df_all$group=factor(df_all$group, levels = unlist(strsplit(factor_order_mh,split = ",")))
+  }
+
+  if (!is.null(merge_mh_len)){
+    df_all$micro_homo_len=factor(df_all$micro_homo_len,levels = c(seq(0,merge_mh_len-1),paste0('>=',merge_mh_len)))
+  }else{
+    df_all$micro_homo_len=factor(df_all$micro_homo_len,levels = c(seq(0,max(df_all$micro_homo_len))))
+  }
+  ### Compare each single condition with WT
+  plot_dis_lst=list()
+  for (i in levels(df_all$group)){
+    if (i!='WT'){
+      df_tmp_line=df_all[which(df_all$group%in%c('WT',i)),]
+      df_tmp_line$group=factor(df_tmp_line$group,levels = c('WT',i))
+      p<- ggplot(df_tmp_line, aes(x=micro_homo_len, y=mean, group=group, color=group)) + 
+        geom_line() +
+        geom_point()+
+        geom_errorbar(aes(ymin=mean-sd, ymax=mean+sd), width=.2,
+                      position=position_dodge(0.05))+
+        theme_classic()
+      p=p+ scale_color_manual(values = c('black','red'))
+      #ggsave(paste0(out_dir,'ins_len/','mh.',i,'.g5.pdf'),p,width = 6,height = 4)
+      plot_dis_lst[['tmp']]=p
+      names(plot_dis_lst)[length(names(plot_dis_lst))]=i
+    }
+  }
+  
+  n_row=ceiling(length(names(plot_dis_lst))/4)
+  n_col=ceiling(length(names(plot_dis_lst))/n_row)
+  merg_mh_dis=cowplot::plot_grid(plotlist = plot_dis_lst, nrow = n_row,ncol = n_col)
+  ggsave(file.path(out_dir,paste(prefix,'merge.MH_len','dis','pdf',sep = '.')),merg_mh_dis,width = 4.5*n_col,height = 3*n_row)
+  
+  ### Compare each single condition with WT, use same y axis scale
+  if ('WT' %in% levels(df_all$group)){
+    df_all_v2=data.frame()
+    for (i in levels(df_all$group)){
+      if (i!='WT'){
+        df_tmp_line=df_all[which(df_all$group%in%c('WT',i)),]
+        df_tmp_line$group=factor(df_tmp_line$group,levels = c('WT',i))
+        df_tmp_line$group2=i
+        df_tmp_line$group3=as.character(df_tmp_line$group)
+        df_tmp_line$group3[which(df_tmp_line$group3==i)]='Factor KO'
+        df_all_v2=rbind(df_all_v2,df_tmp_line)
+      }
+    }
+    df_all_v2$group3=factor(df_all_v2$group3,levels = c('WT','Factor KO'))
+    df_all_v2$group2=factor(df_all_v2$group2, levels = unlist(strsplit(factor_order_mh,split = ",")))
+    p<- ggplot(df_all_v2, aes(x=micro_homo_len, y=mean, group=group3, color=group3)) + 
+      geom_line() +
+      geom_point()+
+      geom_errorbar(aes(ymin=mean-sd, ymax=mean+sd), width=.2,
+                    position=position_dodge(0.05))+
+      scale_y_continuous(limits=c(0,max(df_all_v2$mean)*1.05))+
+      theme_classic()+scale_color_manual(values = c('black','red'))+
+      facet_wrap(~ group2, ncol=4,scales='free')
+    
+    p
+    ggsave(file.path(out_dir,paste(prefix,'merge.MH_len','dis_v2','pdf',sep = '.')),p,width = 4*n_col,height = 3*n_row)
+  }
+ 
+  ### total MH ratio
+  ins_sum$MH_ratio=ins_sum$mh_ins/ins_sum$dupl_ins
+  ins_sum_meta=merge(ins_sum,meta_df,by.x = 'sam_id',by.y = "sam_id")
+  
+  bp <- ggbarplot(ins_sum_meta, x = "group", y = "MH_ratio", add = "mean_sd", fill = "group",alpha=0.5)+
+    labs(x='',y='MH ratio')+theme_bw()+theme(legend.position = 'None',axis.text.x = element_text(angle = 60,hjust = 1))
+  bp 
+  ggsave(file.path(out_dir,paste(prefix,'total_mh_ratio','bar','pdf',sep = '.')),bp,width = 2+0.5*length(unique(ins_sum_meta$group)),height = 4)
+  
+  ins_sum_meta_rm_single=ins_sum_meta[which(ins_sum_meta$group%in%setdiff(ins_sum_meta$group,names(table(ins_sum_meta$group))[which(table(ins_sum_meta$group)==1)])),]
+  bp <- ggbarplot(ins_sum_meta_rm_single, x = "group", y = "MH_ratio", add = "mean_sd", fill = "group",alpha=0.5)+
+    labs(x='',y='MH ratio')+theme_bw()+theme(legend.position = 'None',axis.text.x = element_text(angle = 60,hjust = 1))
+  bp <- bp +stat_compare_means(label = "p.signif", method = "t.test",
+                               ref.group = "WT")
+  bp
+  ggsave(file.path(out_dir,paste(prefix,'total_mh_ratio_sig','bar','pdf',sep = '.')),bp,width = 2+0.5*length(unique(ins_sum_meta_rm_single$group)),height = 4)
+  
+  ### MH ratio distribution 
+  all_fre_merge=melt(fre_homo_all_fre_merge,id.vars = 'micro_homo_len')
+  all_fre_merge=merge(all_fre_merge,meta_df,by.x = 'variable',by.y = 'sam_id')
+  if (!is.null(merge_mh_len)){
+    all_fre_merge$micro_homo_len=factor(all_fre_merge$micro_homo_len,levels = c(seq(0,merge_mh_len-1),paste0('>=',merge_mh_len)))
+  }else{
+    all_fre_merge$micro_homo_len=factor(all_fre_merge$micro_homo_len,levels = c(seq(0,max(all_fre_merge$micro_homo_len))))
+  }
+  all_fre_merge$group=factor(all_fre_merge$group, levels = unlist(strsplit(factor_order_mh,split = ",")))
+  bp <- ggbarplot(all_fre_merge, x = "group", y = "value", add = c("mean_se", "jitter"), color  = "micro_homo_len",palette = "jco",
+                  position = position_dodge(0.8),add.params = list(size = 0.6))+
+    labs(x='',y='MH ratio')+theme_bw()+theme(axis.text.x = element_text(angle = 60,hjust = 1))
+  bp
+  ggsave(file.path(out_dir,paste(prefix,'mh_ratio','type1','pdf',sep = '.')),bp,width = 2+0.5*length(unique(all_fre_merge$group)),height = 4)
+  
+  ### MH ratio distribution, remove error bar
+  if (!is.null(factor_order_mh)){
+    factor_sel=unlist(strsplit(factor_order_mh,split = ","))
+    all_msd_2=all_msd[which(all_msd$group%in%factor_sel),]
+  }else{
+    all_msd_2=all_msd
+  }
+
+  if (!is.null(merge_mh_len)){
+    all_msd_2$micro_homo_len=factor(all_msd_2$micro_homo_len,levels = c(seq(0,merge_mh_len-1),paste0('>=',merge_mh_len)))
+  }else{
+    all_msd_2$micro_homo_len=factor(all_msd_2$micro_homo_len,levels = c(seq(0,max(all_msd_2$micro_homo_len))))
+  }
+  
+  bp <- ggbarplot(all_msd_2, x = "group", y = "mean", fill = "micro_homo_len",alpha=0.5,palette = "jco")+
+    labs(x='',y='MH ratio')+theme_classic()+theme(axis.text.x = element_text(angle = 60,hjust = 1))+
+    scale_y_continuous(expand = expansion(mult = c(0.0000, 0.05)))
+  bp 
+  ggsave(file.path(out_dir,paste(prefix,'mh_ratio','type2','pdf',sep = '.')),bp,width = 2+0.5*length(unique(all_msd_2$group)),height = 4)
+}
+
+## run
+# pipline_out='/Volumes/Elements/haoqian/micro_homology/all_conditions_200717/results/x083_202101/ins_MH/mh_pipeline_out_all'
+# meta_dat="/Volumes/Elements/code/mh_pipeline/develop/data/merged_meta.txt"
+# total_reads_dat="/Volumes/Elements/code/mh_pipeline/develop/data/all_reads.txt"
+# out_dir="/Volumes/Elements/haoqian/micro_homology/all_conditions_200717/results/x083_202101/ins_MH/downstream_update"
+# factor_order_mh="WT,Fen1,UNG,53BP1,ATM,H2AX,XLF,PolH,MSH2,Exo1,Pms2,MLH1,Ape2-M,Ape2-F,AID,UNG-MSH2,MSH2-UNG-HE"
+# min_ins_len = 4
+# category=c(1,2,3,11,7,12,13)
+# merge_mh_len=5
+# prefix = 'all_ins_g4'
+
+args = commandArgs(trailingOnly=TRUE)
+# test if there is at least one argument: if not, return an error
+if (length(args)<4) {
+  stop("At least four arguments must be supplied (input file).n", call.=FALSE)
+} else{
+  pipline_out=args[1]
+  meta_dat=args[2]
+  total_reads_dat=args[3]
+  out_dir=args[4]
+  factor_order_mh=args[5]
+  min_ins_len = as.integer(args[6])
+  category=args[7]
+  merge_mh_len=as.integer(args[8])
+  prefix = args[9]
+}
+
+if (!dir.exists(out_dir)){
+  dir.create(out_dir,recursive = T)
+}
+
+run_downstream(pipline_out = pipline_out,meta_dat=meta_dat,out_dir=out_dir,total_reads_dat=total_reads_dat,
+               category=category,prefix = prefix,min_ins_len = min_ins_len,factor_order_mh=factor_order_mh,merge_mh_len = merge_mh_len)
+
+
+# run_downstream(pipline_out = pipline_out,meta_dat=meta_dat,out_dir=out_dir,total_reads_dat=total_reads_dat,
+#                category=c(1,2,3,11),prefix = 'dul_ins_g2',min_ins_len = 2,factor_order_mh,merge_mh_len = 5)
+# run_downstream(pipline_out = pipline_out,meta_dat=meta_dat,out_dir=out_dir,total_reads_dat=total_reads_dat,
+#                category=c(1,2,3,11,7,12,13),prefix = 'all_ins_g2',min_ins_len = 2,factor_order_mh,merge_mh_len = 5)
+
