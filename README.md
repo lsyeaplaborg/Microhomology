@@ -37,14 +37,9 @@
 
 ### Modify the `.sh` file accordingly 
 
-- `run_deletion_mh.sh` for deletions
+- `microhomology.sh` for microhomology identification 
 
-- `run_insertion_mh.sh` for insertions
+- `count_total_reads.sh` for total reads counting 
 
-### Run whole pipeline with command line:
+- `downstream.sh` for downstream analysis
 
-`bash run_deletion_mh.sh`
-
-#### or 
-
-`bash run_insertion_mh.sh`
